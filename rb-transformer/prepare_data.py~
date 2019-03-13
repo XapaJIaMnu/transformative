@@ -1,0 +1,31 @@
+#!/usr/bin/python
+import torch
+
+
+def prepare_data(train_path, max_len=20):
+    print('Loading data...')
+
+    # read sents and get vocab                                                                                     
+    sents = []
+    vocab = {'<UNK>': 0, '<pad>': 1}
+    i = len(vocab)
+    with open(train_path) as fp:
+        for line in fp:
+            sent = line.strip().split()
+            sents.append(sent)
+            for word in sent:
+                if word not in vocab:
+                    vocab[word] = i
+                    i += 1
+    vocab_len = len(vocab)
+
+    # transform to vectors                                                                                         
+    one_hots = []
+    for i, sent in enumerate(sents):
+        sent_one_hot = torch.zeros((len(sent), vocab_len), dtype=torch.long)
+        for i, tok in enumerate(sent):
+            sent_one_hot[i][vocab.get(tok, 0)] = 1
+        one_hots.append(sent_one_hot)
+
+    # just do one for now                                                                                          
+    return torch.Tensor(one_hots[0]), vocab_len

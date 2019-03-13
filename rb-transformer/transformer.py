@@ -1,0 +1,190 @@
+#!/usr/bin/python
+import numpy as np
+import math
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+from torch.autograd import Variable
+import torch.optim as optim
+
+from prepare_data import *
+from embed import *
+
+device = torch.device('cpu')
+
+class Transformer(nn.Module):
+    
+    def __init__(self, vocab_len, dim_embed, dim_model, maxsentence_len=100, num_heads=1):
+        super().__init__()
+    
+        self.vocab_len = vocab_len
+        self.dim_model = dim_model
+        self.dim_embed = dim_embed
+        #self.embedder = Embedder(vocab_len, dim_embed)
+
+        # create embedding weights
+        self.We = nn.Parameter(torch.randn(vocab_len, dim_embed, requires_grad=True))
+        # TODO: add bias
+
+        # positional encoder
+        self.positional_encoder = PositionalEncoder(self.dim_embed, maxsentence_len)
+        
+        # self-attention layer
+        self.self_attention = Self_attention(dim_embed, dim_model, num_heads) # 1 head
+        self.W0 = nn.Parameter(torch.randn(dim_model * num_heads, dim_embed, requires_grad=True))
+
+        # feed forward layer
+        self.ff = Feedforward_layer(dim_embed, dim_embed, F.relu)
+        
+        # fully connected layer (to vocab size)
+        self.W1 = nn.Parameter(torch.randn(dim_embed, vocab_len, requires_grad=True))
+        self.b1 = nn.Parameter(torch.randn(vocab_len, requires_grad=True))
+        
+        
+    def forward(self, x, x_mask):
+        x = x.float()
+        x_mask = x_mask.float()
+
+        batchsize = x.shape[0]
+
+        embeds = torch.matmul(x, self.We)
+
+        #@TODO: compute all these before with maximum sentence length
+        
+        positional_embeds = self.positional_encoder(embeds)
+        
+        added_embeds = embeds + positional_embeds * x_mask.view(x_mask.shape[0], x_mask.shape[1], -1)
+
+        # scale up
+        scaled = added_embeds * self.dim_embed**0.5
+
+        # self-attention layer + projection
+        mask = create_no_peak_mask(batchsize, x.shape[1]) #@TODO calculate beforehand
+        z1 = self.self_attention(scaled, mask)
+        z2 = torch.matmul(z1, self.W0)
+
+        # add residual connection and normalise
+        z3 = LayerNorm(added_embeds + z2)
+        
+        # feed forward layer
+        z4 = self.ff(z3)
+
+        # add residual connection and normalise
+        z5 = LayerNorm(z3 + z4)
+
+        # fully connected layer and softmax -> ReLU here???
+        z6 = torch.matmul(z5, self.W1) + self.b1
+        
+        #softmax = nn.LogSoftmax(dim=1)
+
+        #return softmax(z6)
+        return z6
+
+
+class Feedforward_layer(nn.Module):
+    def __init__(self, dim_in, dim_out, activation_function):
+        super().__init__()
+        self.W = nn.Parameter(torch.randn(dim_in, dim_out, requires_grad=True))
+        self.b = nn.Parameter(torch.rand(1, dim_out, requires_grad=True))
+        self.activ = activation_function
+
+    def forward(self, x):
+        z = torch.matmul(x, self.W) + self.b
+        return self.activ(z)
+
+    
+def LayerNorm(x):
+    return (x - x.mean(dim=1, keepdim=True)) / x.std(dim=1, keepdim=True)
+        
+
+def create_no_peak_mask(batchsize, max_len_seq):
+    mask = np.triu(np.ones((batchsize, max_len_seq, max_len_seq)), k=1).astype('uint8')
+    mask = torch.from_numpy(mask) == 0
+    
+    return mask
+
+
+class Self_attention(nn.Module):
+
+    def __init__(self, embed_dim, dim_model, num_heads):
+        super().__init__()
+        self.num_heads = num_heads
+        # TODO: implement multiple heads
+        self.W_q = nn.Parameter(torch.randn(embed_dim, dim_model, requires_grad=True))
+        self.W_k = nn.Parameter(torch.randn(embed_dim, dim_model, requires_grad=True))
+        self.W_v = nn.Parameter(torch.randn(embed_dim, dim_model, requires_grad=True))
+        self.num_heads = num_heads
+        self.d_k = dim_model/num_heads
+    
+
+    def forward(self, x, mask):        
+        Q = torch.matmul(x, self.W_q)
+        K = torch.matmul(x, self.W_k)
+        V = torch.matmul(x, self.W_v)
+
+        scores = torch.bmm(Q, K.transpose(1,2))/self.d_k**0.5
+
+        # mask the scores (no peak to words ahead)
+        scores = scores.masked_fill(mask == 0, -1e9)
+        # now apply softmax
+        Z = F.softmax(scores, dim=-1).matmul(V)
+
+        return Z
+
+def get_sent(pred, vocab):
+
+    sent = ''
+    # for each token
+    for i in range(len(pred)):
+        _, idx = torch.topk(pred[i], k=1)
+        word = vocab.get(idx[0].item(), 1)
+        sent += word + ' '
+    print(sent)
+
+    
+def main(train_path):
+    embed_size = 512
+    model_size = 64
+    lr = 0.0001
+    batchsize = 10
+    
+    #xs, ys, vocab_len = prepare_data(train_path)
+    train, vocab = get_data(train_path)
+    idx2word = {vocab[w]: w for w in vocab}
+    batches = batch_iterator(train, vocab, batchsize)
+    
+    model = Transformer(len(vocab), embed_size, model_size)
+    optimiser = torch.optim.Adam(model.parameters(), lr=lr, betas=(0.9, 0.98), eps=1e-9)
+
+    
+    for epoch in range(10000):
+
+        for x, y in batches:
+
+            x_mask = y > 0
+            optimiser.zero_grad()
+            
+            y_pred = model(x, x_mask)
+
+            # print out first sentence
+            get_sent(y_pred[0], idx2word)
+            
+            loss = F.cross_entropy(y_pred.transpose(1,2), y, ignore_index=0)
+            print("loss = ", loss.item())
+            #input()
+            loss.backward()
+            optimiser.step()
+
+            
+if __name__ == '__main__':
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument('train_path')
+    parser.parse_args()
+    args = parser.parse_args()
+
+    main(args.train_path)
+
+    
+
+

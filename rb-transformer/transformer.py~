@@ -1,0 +1,62 @@
+#!/usr/bin/python
+import numpy as np
+import math
+import torch
+import torch.nn as nn
+from torch.autograd import Variable
+
+from prepare_data import *
+from embed import *
+
+device = torch.device('cpu')
+
+class Transformer():
+    
+    def __init__(self, vocab_len, dim_model):
+        self.vocab_len = vocab_len
+        self.dim_model = dim_model
+
+        self.embedder = Embedder(vocab_len, dim_model)
+        self.positional_encoder = PositionalEncoder(dim_model, 80)
+        
+    def forward(self, x):
+        print(x)
+        embeds = self.embedder(x)
+        positional_embeds = self.positional_encoder(embeds)
+        added_embeds = embeds + positional_embeds
+        print(added_embeds.dtype)
+        print(added_embeds)
+
+
+def create_no_peak_mask(max_len_seq):
+
+    mask = np.triu(np.ones((1, max_len_seq, max_len_seq)), k=1).astype('uint8')
+    mask = torch.from_numpy(mask) == 0 
+    print(mask)
+    #mask = (1 - mask) * -math.inf
+    #print(mask)
+
+
+def main(train_path):
+
+    embed_size = 512
+    example, vocab_len = prepare_data(train_path)
+
+    model = Transformer(vocab_len, embed_size)
+    model.forward(example)
+    create_no_peak_mask(80)
+
+
+
+if __name__ == '__main__':
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument('train_path')
+    parser.parse_args()
+    args = parser.parse_args()
+
+    main(args.train_path)
+
+    
+
+
