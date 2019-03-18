@@ -33,19 +33,29 @@ class batch_iterator:
         self.train_buffer = []
         self.end_of_data = False
 
+        self.reset()
+
     def __iter__(self):
         return self
 
     def reset(self):
+        self.end_of_data = False
+        
+        # if source buffer empty, fill it up
+        if len(self.train_buffer) == 0:
+            self.end_of_data = False
+            for sent in self.train:
+                self.train_buffer.append(sent)
+        
         return self
 
     def __next__(self):
         batch = []
-        
-        # if source buffer empty, fill it up
-        if len(self.train_buffer) == 0:
-            for sent in self.train:
-                self.train_buffer.append(sent)
+
+        if self.end_of_data:
+            self.reset()
+            raise StopIteration
+                
         # otherwise add to batch
 
         #@TODO mend this later
@@ -58,8 +68,11 @@ class batch_iterator:
                 batch.append(newsent)
         except IndexError:
             self.end_of_data = True
-            
 
+        if len(batch) == 0:
+            self.reset()
+            raise StopIteration
+            
         # now transform into tensors
         one_hot_batch = []
         ys = []
@@ -75,5 +88,6 @@ class batch_iterator:
                 y[i] = self.train_dict.get('<pad>')
             one_hot_batch.append(sent_one_hot)
             ys.append(y)
-            
+
+        #print("returning")
         return torch.Tensor(one_hot_batch), torch.tensor(ys)
