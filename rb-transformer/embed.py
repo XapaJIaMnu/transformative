@@ -41,4 +41,4 @@ class PositionalEncoder(nn.Module):
         seq_len = x.size(1)
         pe = Variable(self.pe[:,:seq_len], requires_grad=False)
         x = x + pe
-        return x
+        return self.dropout(x)
