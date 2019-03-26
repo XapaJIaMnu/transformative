@@ -14,7 +14,7 @@ device = torch.device('cpu')
 
 class Transformer(nn.Module):
     
-    def __init__(self, vocab_len, dim_embed, dim_model, maxsentence_len=100, num_heads=1):
+    def __init__(self, vocab_len, dim_embed, dim_model, maxsentence_len=100, num_heads=2):
         super().__init__()
     
         self.vocab_len = vocab_len
@@ -44,23 +44,20 @@ class Transformer(nn.Module):
     def forward(self, x, x_mask):
         x = x.float()
         x_mask = x_mask.float()
-
         batchsize = x.shape[0]
 
         embeds = torch.matmul(x, self.We)
 
         #@TODO: compute all these before with maximum sentence length
-        
         positional_embeds = self.positional_encoder(embeds)
-        
-        added_embeds = embeds + positional_embeds * x_mask.view(x_mask.shape[0], x_mask.shape[1], -1)
+        embeds = embeds * self.dim_embed**0.5
+        added_embeds = (embeds + positional_embeds) * x_mask.view(x_mask.shape[0], x_mask.shape[1], -1)
 
         # scale up
-        scaled = added_embeds * self.dim_embed**0.5
 
         # self-attention layer + projection
         mask = create_no_peak_mask(batchsize, x.shape[1]) #@TODO calculate beforehand
-        z1 = self.self_attention(scaled, mask)
+        z1 = self.self_attention(embeds, mask)
         z2 = torch.matmul(z1, self.W0)
 
         # add residual connection and normalise
@@ -85,7 +82,7 @@ class Feedforward_layer(nn.Module):
     def __init__(self, dim_in, dim_out, activation_function):
         super().__init__()
         self.W = nn.Parameter(torch.randn(dim_in, dim_out, requires_grad=True))
-        self.b = nn.Parameter(torch.rand(1, dim_out, requires_grad=True))
+        self.b = nn.Parameter(torch.randn(1, dim_out, requires_grad=True))
         self.activ = activation_function
 
     def forward(self, x):
@@ -105,11 +102,12 @@ def create_no_peak_mask(batchsize, max_len_seq):
 
 
 class Self_attention(nn.Module):
-
     def __init__(self, embed_dim, dim_model, num_heads):
         super().__init__()
         self.num_heads = num_heads
+        #self.dim_head = int(dim_model/num_heads)
         # TODO: implement multiple heads
+        
         self.W_q = nn.Parameter(torch.randn(embed_dim, dim_model, requires_grad=True))
         self.W_k = nn.Parameter(torch.randn(embed_dim, dim_model, requires_grad=True))
         self.W_v = nn.Parameter(torch.randn(embed_dim, dim_model, requires_grad=True))
@@ -122,7 +120,18 @@ class Self_attention(nn.Module):
         K = torch.matmul(x, self.W_k)
         V = torch.matmul(x, self.W_v)
 
-        scores = torch.bmm(Q, K.transpose(1,2))/self.d_k**0.5
+        print(Q.shape)
+        input()
+        # reshape to get multiple heads
+        batch_size, sent_lens, num_heads = x.shape[0], x.shape[1], self.num_heads
+        Q = Q.reshape(batch_size, num_heads, sent_lens, -1).permute(0,2,1,3)
+        K = K.reshape(batch_size, num_heads, sent_lens, -1).permute(0,2,1,3)
+        V = V.reshape(batch_size, num_heads, sent_lens, -1).permute(0,2,1,3)
+
+        print(Q.shape)
+        print(K.transpose(3,2).shape)
+        
+        scores = torch.matmul(Q, K.transpose(3,2))/self.d_k**0.5
 
         # mask the scores (no peak to words ahead)
         scores = scores.masked_fill(mask == 0, -1e9)
@@ -144,9 +153,9 @@ def get_sent(pred, vocab):
     
 def main(train_path):
     embed_size = 512
-    model_size = 64
+    model_size = 512
     lr = 0.0001
-    batchsize = 10
+    batchsize = 4
     
     #xs, ys, vocab_len = prepare_data(train_path)
     train, vocab = get_data(train_path)
@@ -157,7 +166,7 @@ def main(train_path):
     optimiser = torch.optim.Adam(model.parameters(), lr=lr, betas=(0.9, 0.98), eps=1e-9)
 
     
-    for epoch in range(10000):
+    for epoch in range(2000):
 
         for x, y in batches:
 
@@ -167,11 +176,11 @@ def main(train_path):
             y_pred = model(x, x_mask)
 
             # print out first sentence
-            get_sent(y_pred[0], idx2word)
+            for i in range(y_pred.shape[0]):
+                get_sent(y_pred[i], idx2word)
             
             loss = F.cross_entropy(y_pred.transpose(1,2), y, ignore_index=0)
             print("loss = ", loss.item())
-            #input()
             loss.backward()
             optimiser.step()
 
